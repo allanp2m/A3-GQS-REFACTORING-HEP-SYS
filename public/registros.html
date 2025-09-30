@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <title>Registros de Diagnósticos</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<header>
+  <div id="header-container"></div>
+</header>
+<body>
+  <main>
+    <h1>Registros Salvos</h1>
+    <div style="display:flex;gap:18px;align-items:center;justify-content:center;margin-bottom:18px;flex-wrap:wrap;">
+      <input id="busca" type="text" placeholder="Buscar Nome, ID ou Diagnóstico" style="min-width:220px;">
+      <select id="filtro-diagnostico">
+        <option value="">Todos os Diagnósticos</option>
+        <option value="0=Blood Donor">Blood Donor</option>
+        <option value="0s=suspect Blood Donor">Suspect Blood Donor</option>
+        <option value="1=Hepatitis">Hepatitis</option>
+        <option value="2=Fibrosis">Fibrosis</option>
+        <option value="3=Cirrhosis">Cirrhosis</option>
+      </select>
+    </div>
+    <table border="1" id="tabela">
+      <thead>
+        <tr>
+          <th>ID</th><th>Nome</th><th>Diagnóstico</th><th>Precisão</th><th>Ações</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div id="paginacao" style="display:flex;justify-content:center;align-items:center;margin-top:18px;gap:12px;"></div>
+
+    <div id="modal">
+      <div id="modal-content">
+        <span id="modal-close">&times;</span>
+        <div id="modal-body"></div>
+        <div class="modal-actions">
+          <button id="modal-editar">Editar</button>
+          <button id="modal-excluir">Excluir</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    fetch('_header.html')
+      .then(res => res.text())
+      .then(html => {
+        document.getElementById('header-container').innerHTML = html;
+      });
+    let registros = [];
+    let registrosFiltrados = [];
+    let registroAtual = null;
+    let paginaAtual = 1;
+    const registrosPorPagina = 10;
+
+    async function carregarRegistros() {
+      const res = await fetch('/diagnosticos');
+      registros = await res.json();
+      aplicarFiltroBusca();
+    }
+
+    function aplicarFiltroBusca() {
+      const busca = document.getElementById('busca').value.trim().toLowerCase();
+      const filtroDiag = document.getElementById('filtro-diagnostico').value;
+      registrosFiltrados = registros.filter(r => {
+        let matchDiag = !filtroDiag || r.diagnostico === filtroDiag;
+        let matchBusca = true;
+        if (busca) {
+          matchBusca = (
+            (r.Name && r.Name.toLowerCase().includes(busca)) ||
+            (String(r.id).includes(busca)) ||
+            (r.diagnostico && r.diagnostico.toLowerCase().includes(busca))
+          );
+        }
+        return matchDiag && matchBusca;
+      });
+      paginaAtual = 1;
+      renderTabela();
+      renderPaginacao();
+    }
+
+    function renderTabela() {
+      const tbody = document.querySelector('#tabela tbody');
+      tbody.innerHTML = '';
+      const inicio = (paginaAtual - 1) * registrosPorPagina;
+      const fim = inicio + registrosPorPagina;
+      const pagina = registrosFiltrados.slice(inicio, fim);
+      const labelMap = {
+        '0=Blood Donor': 'Blood Donor',
+        '0s=suspect Blood Donor': 'Suspect Blood Donor',
+        '1=Hepatitis': 'Hepatitis',
+        '2=Fibrosis': 'Fibrosis',
+        '3=Cirrhosis': 'Cirrhosis'
+      };
+      pagina.forEach(d => {
+        const linha = document.createElement('tr');
+        let diag = d.diagnostico;
+        if (labelMap[diag]) diag = labelMap[diag];
+        linha.innerHTML = `
+          <td>${d.id}</td>
+          <td>${d.Name || ''}</td>
+          <td>${diag}</td>
+          <td>${(d.precisao * 100).toFixed(2)}%</td>
+          <td>
+            <button onclick="abrirModal(${d.id})">Visualizar</button>
+          </td>
+        `;
+        tbody.appendChild(linha);
+      });
+    }
+
+    function renderPaginacao() {
+      const paginacao = document.getElementById('paginacao');
+      paginacao.innerHTML = '';
+      const totalPaginas = Math.ceil(registrosFiltrados.length / registrosPorPagina) || 1;
+      const btnAnt = document.createElement('button');
+      btnAnt.textContent = 'Anterior';
+      btnAnt.disabled = paginaAtual === 1;
+      btnAnt.onclick = () => { paginaAtual--; renderTabela(); renderPaginacao(); };
+      paginacao.appendChild(btnAnt);
+      // Números das páginas
+      for (let i = 1; i <= totalPaginas; i++) {
+        const btn = document.createElement('button');
+        btn.textContent = i;
+        btn.disabled = i === paginaAtual;
+        btn.onclick = () => { paginaAtual = i; renderTabela(); renderPaginacao(); };
+        paginacao.appendChild(btn);
+      }
+      const btnProx = document.createElement('button');
+      btnProx.textContent = 'Próxima';
+      btnProx.disabled = paginaAtual === totalPaginas;
+      btnProx.onclick = () => { paginaAtual++; renderTabela(); renderPaginacao(); };
+      paginacao.appendChild(btnProx);
+    }
+
+    function abrirModal(id) {
+      registroAtual = registros.find(r => r.id === id);
+      if (!registroAtual) return;
+      const labelMap = {
+        '0=Blood Donor': 'Blood Donor',
+        '0s=suspect Blood Donor': 'Suspect Blood Donor',
+        '1=Hepatitis': 'Hepatitis',
+        '2=Fibrosis': 'Fibrosis',
+        '3=Cirrhosis': 'Cirrhosis'
+      };
+      const body = document.getElementById('modal-body');
+      body.innerHTML = Object.entries(registroAtual).map(([k,v]) => {
+        if (k === 'diagnostico' && labelMap[v]) {
+          return `<div><b>${k}:</b> <span id="modal-campo-${k}">${labelMap[v]}</span></div>`;
+        }
+        return `<div><b>${k}:</b> <span id="modal-campo-${k}">${v}</span></div>`;
+      }).join('');
+      document.getElementById('modal').style.display = 'flex';
+    }
+
+    document.getElementById('modal-close').onclick = function() {
+      document.getElementById('modal').style.display = 'none';
+    };
+
+    document.getElementById('modal-editar').onclick = async function() {
+      if (!registroAtual) return;
+      for (const k in registroAtual) {
+        if (k === 'id') continue;
+        const span = document.getElementById('modal-campo-' + k);
+        span.contentEditable = true;
+        span.style.background = '#232837';
+        span.style.color = '#4fd1c5';
+        span.style.border = '1px solid #4fd1c5';
+        span.style.padding = '2px 4px';
+        span.style.borderRadius = '4px';
+      }
+      this.textContent = 'Salvar';
+      this.onclick = async function() {
+        const novo = { ...registroAtual };
+        for (const k in novo) {
+          if (k === 'id') continue;
+          const span = document.getElementById('modal-campo-' + k);
+          novo[k] = span.innerText;
+        }
+        if (novo.precisao) novo.precisao = parseFloat(novo.precisao.replace('%',''))/100;
+        await fetch(`/diagnosticos/${registroAtual.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(novo)
+        });
+        mostrarConfirmacao('Registro atualizado com sucesso!');
+        document.getElementById('modal').style.display = 'none';
+        carregarRegistros();
+        this.textContent = 'Editar';
+        this.onclick = arguments.callee;
+      };
+    };
+
+    document.getElementById('modal-excluir').onclick = async function() {
+      if (!registroAtual) return;
+      if (!confirm('Tem certeza que deseja excluir?')) return;
+      await fetch(`/diagnosticos/${registroAtual.id}`, { method: 'DELETE' });
+      mostrarConfirmacao('Registro excluído com sucesso!');
+      document.getElementById('modal').style.display = 'none';
+      carregarRegistros();
+    };
+
+    function mostrarConfirmacao(msg) {
+      let conf = document.createElement('div');
+      conf.innerHTML = `<div style="position:fixed;top:30px;left:50%;transform:translateX(-50%);background:#232837;color:#4fd1c5;padding:18px 32px;border-radius:8px;box-shadow:0 2px 16px #0008;font-size:1.2em;z-index:9999;">${msg}</div>`;
+      document.body.appendChild(conf);
+      setTimeout(() => conf.remove(), 2200);
+    }
+
+    window.onclick = function(event) {
+      if (event.target == document.getElementById('modal')) {
+        document.getElementById('modal').style.display = 'none';
+      }
+    };
+    document.getElementById('busca').addEventListener('input', aplicarFiltroBusca);
+    document.getElementById('filtro-diagnostico').addEventListener('change', aplicarFiltroBusca);
+    carregarRegistros();
+  </script>
+</body>
+</html>

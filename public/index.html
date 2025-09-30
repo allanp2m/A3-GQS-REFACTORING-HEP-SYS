@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <title>Diagnóstico Hepático</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<header>
+  <div id="header-container"></div>
+</header>
+<body>
+  <main>
+    <h1>Registro de Paciente</h1>
+    <form id="form">
+      <label for="Name">Nome</label>
+      <input type="text" name="Name" placeholder="Nome" required>
+
+      <label for="Age">Idade</label>
+      <input type="number" name="Age" placeholder="Idade" required>
+
+      <label for="Sex">Sexo</label>
+      <select name="Sex">
+        <option value="m">Masculino</option>
+        <option value="f">Feminino</option>
+      </select>
+      <label for="ALB">Albumina (ALB)</label>
+      <input type="number" step="0.01" name="ALB" id="ALB" placeholder="ALB">
+
+      <label for="ALP">Fosfatase Alcalina (ALP)</label>
+      <input type="number" step="0.01" name="ALP" id="ALP" placeholder="ALP">
+
+      <label for="ALT">Alanina Aminotransferase (ALT)</label>
+      <input type="number" step="0.01" name="ALT" id="ALT" placeholder="ALT">
+
+      <label for="AST">Aspartato Aminotransferase (AST)</label>
+      <input type="number" step="0.01" name="AST" id="AST" placeholder="AST">
+
+      <label for="BIL">Bilirrubina (BIL)</label>
+      <input type="number" step="0.01" name="BIL" id="BIL" placeholder="BIL">
+
+      <label for="CHE">Colinesterase (CHE)</label>
+      <input type="number" step="0.01" name="CHE" id="CHE" placeholder="CHE">
+
+      <label for="CHOL">Colesterol (CHOL)</label>
+      <input type="number" step="0.01" name="CHOL" id="CHOL" placeholder="CHOL">
+
+      <label for="CREA">Creatinina (CREA)</label>
+      <input type="number" step="0.01" name="CREA" id="CREA" placeholder="CREA">
+
+      <label for="GGT">Gama GT (GGT)</label>
+      <input type="number" step="0.01" name="GGT" id="GGT" placeholder="GGT">
+
+      <label for="PROT">Proteína Total (PROT)</label>
+      <input type="number" step="0.01" name="PROT" id="PROT" placeholder="PROT">
+      <button type="submit">Diagnosticar</button>
+    </form>
+
+    <div id="resultado"></div>
+    <h1></h1>
+    <button id="salvarRegistroBtn" style="display: none;">Salvar Registro</button>
+  </main>
+
+  <script>
+    fetch('_header.html')
+      .then(res => res.text())
+      .then(html => {
+        document.getElementById('header-container').innerHTML = html;
+      });
+
+    let ultimoDiagnostico = null;
+
+    document.getElementById('form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      const data = Object.fromEntries(new FormData(form).entries());
+
+      try {
+        const res = await fetch('/diagnose', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+
+        const json = await res.json();
+
+        const labelMap = {
+          '0=Blood Donor': 'Blood Donor',
+          '0s=suspect Blood Donor': 'Suspect Blood Donor',
+          '1=Hepatitis': 'Hepatitis',
+          '2=Fibrosis': 'Fibrosis',
+          '3=Cirrhosis': 'Cirrhosis'
+        };
+        const labelAmigavel = labelMap[json.label] || labelMap[json.diagnostico] || json.label;
+
+        document.getElementById('resultado').innerHTML = `
+          <h3>Diagnóstico: ${labelAmigavel}</h3>
+          <p>Precisão: ${(json.accuracy * 100).toFixed(2)}%</p>
+        `;
+
+        ultimoDiagnostico = {
+          ...data,
+          diagnostico: json.label,
+          precisao: json.accuracy
+        };
+
+        document.getElementById('salvarRegistroBtn').style.display = 'inline-block';
+
+      } catch (err) {
+        alert("Erro no diagnóstico: " + err.message);
+      }
+    });
+
+    document.getElementById('salvarRegistroBtn').addEventListener('click', async () => {
+      if (!ultimoDiagnostico) return;
+
+      try {
+        await fetch('/diagnosticos', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(ultimoDiagnostico)
+        });
+        mostrarConfirmacao('Registro salvo com sucesso!');
+        document.getElementById('salvarRegistroBtn').style.display = 'none';
+      } catch (err) {
+        alert("Erro ao salvar registro: " + err.message);
+      }
+    });
+
+    function mostrarConfirmacao(msg) {
+      let conf = document.createElement('div');
+      conf.innerHTML = `<div style="position:fixed;top:30px;left:50%;transform:translateX(-50%);background:#232837;color:#4fd1c5;padding:18px 32px;border-radius:8px;box-shadow:0 2px 16px #0008;font-size:1.2em;z-index:9999;">${msg}</div>`;
+      document.body.appendChild(conf);
+      setTimeout(() => conf.remove(), 2200);
+    }
+</script>
+</body>
+</html>
