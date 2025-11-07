@@ -1,73 +1,96 @@
 const express = require('express');
-const axios = require('axios');
-const fs = require('fs');
 const path = require('path');
-const app = express();
+const { PredictionClient } = require('./src/services/PredictionClient');
+const { DiagnosisRepository } = require('./src/repositories/DiagnosisRepository');
 
-const DB_FILE = path.join(__dirname, 'public/diagnosticos.json');
+// Servidor principal Express encapsulado em classe para facilitar manutenção e testes
 
-app.use(express.json());
-app.use(express.static('public'));
-
-// Diagnóstico com IA
-app.post('/diagnose', async (req, res) => {
-  try {
-    const response = await axios.post('http://localhost:5000/predict', req.body);
-    res.json(response.data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+class AppServer {
+  constructor(config) {
+    this.port = config.port || 3000;
+    this.predictionBaseUrl = config.predictionBaseUrl || 'http://localhost:5000';
+    this.app = express();
+    this.repo = new DiagnosisRepository(path.join(__dirname, 'public/diagnosticos.json'));
+    this.predictionClient = new PredictionClient(this.predictionBaseUrl);
+    this._configure();
+    this._routes();
   }
-});
 
-// Carregar diagnósticos do arquivo
-const carregarDiagnosticos = () => {
-  try {
-    if (!fs.existsSync(DB_FILE)) return [];
-    return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-  } catch (err) {
-    console.error("Erro ao carregar diagnosticos.json:", err.message);
-    return [];
+  _configure() {
+    // Middlewares essenciais
+    this.app.use(express.json());
+    this.app.use(express.static('public'));
   }
-};
 
+  _routes() {
+    // Rota de predição utilizando serviço Python (Flask)
+    this.app.post('/diagnose', async (req, res) => {
+      try {
+        const payload = req.body || {};
+        const result = await this.predictionClient.diagnose(payload);
+        res.json(result);
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
+    });
 
-// Salvar diagnósticos
-const salvarDiagnosticos = (data) => {
-  fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
-};
+    // Rota opcional para re-treinar o modelo
+    this.app.post('/retrain', async (req, res) => {
+      try {
+        const info = await this.predictionClient.retrain();
+        res.json(info);
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
+    });
 
-// Criar novo diagnóstico
-app.post('/diagnosticos', (req, res) => {
-  const lista = carregarDiagnosticos();
-  const novo = { id: Date.now(), ...req.body };
-  lista.push(novo);
-  salvarDiagnosticos(lista);
-  res.json(novo);
+    // Listagem de diagnósticos salvos
+    this.app.get('/diagnosticos', (req, res) => {
+      res.json(this.repo.list());
+    });
+
+    // Criação de novo diagnóstico (salva o retorno da predição + dados)
+    this.app.post('/diagnosticos', (req, res) => {
+      try {
+        const novo = this.repo.create(req.body || {});
+        res.json(novo);
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+    // Atualização de registro
+    this.app.put('/diagnosticos/:id', (req, res) => {
+      try {
+        this.repo.update(req.params.id, req.body || {});
+        res.json({ ok: true });
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+    // Remoção de registro
+    this.app.delete('/diagnosticos/:id', (req, res) => {
+      try {
+        this.repo.delete(req.params.id);
+        res.json({ ok: true });
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+  }
+
+  start() {
+    // Inicializa o servidor HTTP
+    this.app.listen(this.port, () => {
+      console.log(`Node.js server running on http://localhost:${this.port}`);
+    });
+  }
+}
+
+// Inicialização da aplicação
+const server = new AppServer({
+  port: process.env.PORT ? parseInt(process.env.PORT) : 3000,
+  predictionBaseUrl: process.env.PREDICTION_API || 'http://localhost:5000'
 });
-
-// Listar todos
-app.get('/diagnosticos', (req, res) => {
-  res.json(carregarDiagnosticos());
-});
-
-// Editar
-app.put('/diagnosticos/:id', (req, res) => {
-  let lista = carregarDiagnosticos();
-  const id = parseInt(req.params.id);
-  lista = lista.map(d => d.id === id ? { ...d, ...req.body } : d);
-  salvarDiagnosticos(lista);
-  res.json({ ok: true });
-});
-
-// Deletar
-app.delete('/diagnosticos/:id', (req, res) => {
-  let lista = carregarDiagnosticos();
-  const id = parseInt(req.params.id);
-  lista = lista.filter(d => d.id !== id);
-  salvarDiagnosticos(lista);
-  res.json({ ok: true });
-});
-
-app.listen(3000, () => {
-  console.log('Node.js server running on http://localhost:3000');
-});
+server.start();
