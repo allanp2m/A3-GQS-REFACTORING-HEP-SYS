@@ -1,59 +1,76 @@
-from flask import Flask, request, jsonify
-import pandas as pd
-import numpy as np
-from sklearn.preprocessing import LabelEncoder, StandardScaler
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.model_selection import train_test_split
-import joblib
+from __future__ import annotations
 
-app = Flask(__name__)
+import os
+import traceback
+from pathlib import Path
+from typing import Any, Dict
 
-df = pd.read_csv("HepatitisCdata.csv")
-df.drop("Unnamed: 0", axis=1, inplace=True)
+from flask import Flask, jsonify, request
 
-for col in ['ALB', 'ALP', 'ALT', 'CHOL', 'PROT']:
-    df[col].fillna(df[col].mean(), inplace=True)
+# Import flexível: permite executar como módulo ou script direto.
+try:  # Tentativa com import relativo
+    from .prediction_service import (
+        HepatitisPredictor,
+        PredictionRepository,
+        make_default_paths,
+        get_db_url_from_env,
+    )
+except ImportError:  # Fallback caso executado fora de pacote
+    from prediction_service import (
+        HepatitisPredictor,
+        PredictionRepository,
+        make_default_paths,
+        get_db_url_from_env,
+    )
 
-le_category = LabelEncoder()
-le_sex = LabelEncoder()
-df['Category'] = le_category.fit_transform(df['Category'])
-df['Sex'] = le_sex.fit_transform(df['Sex'])
 
-X = df.drop("Category", axis=1)
-y = df["Category"]
+def create_app() -> Flask:
+    app = Flask(__name__)
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=1)
-scaler = StandardScaler()
-X_train = scaler.fit_transform(X_train)
+    # Instancia o preditor e o repositório opcional (MySQL se configurado)
+    paths = make_default_paths()
+    predictor = HepatitisPredictor(paths)
+    repo = PredictionRepository(get_db_url_from_env())
 
-model = KNeighborsClassifier(n_neighbors=5)
-model.fit(X_train, y_train)
+    @app.route("/train", methods=["POST"])
+    def train_endpoint():
+        # Re-treina o modelo manualmente
+        try:
+            result = predictor.train()
+            return jsonify({"ok": True, **result})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
 
-joblib.dump((model, scaler, le_category, le_sex), "knn_model.pkl")
+    @app.route("/predict", methods=["POST"])
+    def predict_endpoint():
+        # Realiza predição para um único registro enviado em JSON
+        try:
+            payload: Dict[str, Any] = request.get_json(force=True) or {}
 
-@app.route("/predict", methods=["POST"])
-def predict():
-    data = request.json
-    try:
-        model, scaler, le_category, le_sex = joblib.load("knn_model.pkl")
-        
-        input_data = pd.DataFrame([data])
-        input_data["Sex"] = le_sex.transform([input_data.at[0, "Sex"]])
+            # Validação mínima: exige pelo menos um campo chave
+            if not any(k in payload for k in ["Age", "ALB", "ALT", "AST"]):
+                return jsonify({"error": "Payload vazio ou sem campos esperados."}), 400
 
-        input_data = input_data[['Age', 'Sex', 'ALB', 'ALP', 'ALT', 'AST', 'BIL', 'CHE',
-                                'CHOL', 'CREA', 'GGT', 'PROT']]
+            result = predictor.predict(payload)
+            repo.log(payload, result)  # Registro opcional (ignorado se sem DB)
 
-        X_input = scaler.transform(input_data)
-        prediction = model.predict(X_input)
-        proba = model.predict_proba(X_input).max()
+            response = {
+                "prediction": result.get("prediction"),
+                "label": result.get("label"),
+            }
+            if result.get("confidence") is not None:
+                response["accuracy"] = result.get("confidence")
+            return jsonify(response)
+        except Exception as e:
+            # Se DEBUG=1 retorna traceback para facilitar análise
+            debug = os.getenv("DEBUG") == "1"
+            err_payload = {"error": str(e)}
+            if debug:
+                err_payload["traceback"] = traceback.format_exc()
+            return jsonify(err_payload), 500
 
-        return jsonify({
-            "prediction": int(prediction[0]),
-            "label": le_category.inverse_transform(prediction)[0],
-            "accuracy": round(float(proba), 4)
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return app
 
 if __name__ == "__main__":
-    app.run(port=5000)
+    app = create_app()
+    app.run(host="0.0.0.0", port=5000)
