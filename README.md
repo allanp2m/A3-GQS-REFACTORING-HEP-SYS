@@ -1,53 +1,166 @@
+<div align="center">
+
 # A3-GQS-REFACTORING-HEP-SYS
 
-# 📌 Análise de Arquitetura e Boas Práticas
+Sistema de diagnóstico hepático com refatoração orientada a objetos, separação de responsabilidades e serviço de predição em Python (Flask + scikit-learn) consumido por aplicação Node.js (Express).
 
-## 🔎 Visão Geral
-O projeto apresenta **forte acoplamento** entre o pipeline de treino e a API de predição, ausência de camadas bem definidas e práticas inadequadas de configuração, validação e operação.  
-Principais problemas identificados:
+</div>
 
-- **Acoplamento excessivo**: o treinamento do modelo acontece dentro do mesmo módulo que expõe a rota, dificultando manutenção, implantação e escalabilidade.
-- **Ausência de POO e camadas**: lógica de negócio, I/O e web estão misturados sem separação em serviços, repositórios ou controladores.
-- **Configuração hardcoded**: caminhos, portas e URLs fixos no código em vez de variáveis de ambiente.
-- **Validação de entrada inexistente**: não há schemas formais, aumentando risco de erros e inconsistência de dados.
-- **Sem testes, logs estruturados ou métricas**: dificulta depuração e evolução.
-- **Problemas operacionais**: dois serviços (Flask e Express) sem orquestração, healthcheck ou retry/backoff.
+## 🧱 Arquitetura Refatorada
 
-## ⚙️ model_api.py (Flask + sklearn)
+| Camada | Tecnologia | Responsabilidade |
+|--------|------------|------------------|
+| Predição (Python) | Flask + scikit-learn | Treino e inferência do modelo KNN com pipeline de pré-processamento |
+| Serviço Web Python | `model_api.py` | Endpoints `/train` e `/predict`, validação mínima, logging condicional (DEBUG) |
+| Lógica de Modelo | `prediction_service.py` | Classe `HepatitisPredictor` (treino, salvar/carregar, predição) + `PredictionRepository` (log opcional em MySQL) |
+| API Principal | Node.js (Express) | CRUD de diagnósticos e proxy para predição via `/diagnose` |
+| Cliente de Predição | `PredictionClient.js` | Encapsula chamadas HTTP para Flask (predict/train) |
+| Persistência Local | `DiagnosisRepository.js` | Armazena diagnósticos em arquivo JSON |
 
-### Problemas Identificados
-- **Treinamento no import**: modelo é treinado e serializado na importação → inicialização lenta, mistura de responsabilidades e dificuldade para escalar.
-- **Data leakage**: imputação de NaN e label encoding feitos antes do `train_test_split`.
-- **Pré-processamento inconsistente**: inferência não replica o fluxo de treino (ex.: ausência de imputação).
-- **Uso incorreto do LabelEncoder**: introduz ordinalidade artificial → deveria ser One-Hot.
-- **Dependência manual da ordem das colunas** → solução frágil.
-- **Não uso de `Pipeline` do sklearn** → serialização manual de modelo/scaler/encoders.
-- **Carregamento do modelo em cada requisição (`joblib.load`)** → overhead de I/O e latência.
-- **Métrica mal nomeada**: campo `accuracy` retorna probabilidade prevista, não acurácia real.
-- **Tratamento de erros genérico** → risco de vazar informações internas.
-- **Leitura de CSV frágil**: caminho relativo fixo; `drop` em coluna sem checar existência.
-- **Servidor inadequado para produção**: uso de `app.run` em vez de WSGI (ex.: gunicorn).
-- **Ausência de avaliação de desempenho**: `X_test/y_test` não são usados; sem métricas offline.
-- **Reprodutibilidade fraca**: apenas `random_state`; versões de libs não pinadas; sem seed global.
+## 🚀 Principais Melhorias
 
-## ⚙️ index.js (Express + armazenamento em arquivo)
+1. Separação clara entre API Web e lógica de ML (POO no Python e JS).
+2. Uso de `Pipeline` + `ColumnTransformer` para evitar divergência treino/inferência.
+3. Modelo carregado em memória (evita re-load por requisição).
+4. Normalização dos dados de entrada com imputação e codificação robusta.
+5. Endpoints adicionais: `/train` para re-treinar e `/retrain` no Node.
+6. Logs de depuração opcionais com `DEBUG=1`.
+7. Preparado para MySQL via SQLAlchemy (caso `DB_URL` seja fornecida).
+8. Comentários padronizados em PT-BR e código enxuto.
 
-### Problemas Identificados
-- **Armazenamento inseguro**: `diagnosticos.json` em `/public` → exposição pública de dados sensíveis.
-- **Operações síncronas de I/O**: `readFileSync` e `writeFileSync` → bloqueiam o event loop.
-- **Condições de corrida**: padrão read-modify-write sem bloqueio → risco de sobrescrita.
-- **Validação inexistente**: payloads aceitos sem checagem; endpoints retornam sempre sucesso.
-- **Geração de IDs frágil**: uso de `Date.now()` → não garante unicidade sob concorrência.
-- **Acoplamento ao serviço Python**: URL hardcoded, sem timeout/retry.
-- **Falta de segurança**: sem autenticação, rate limiting ou sanitização de dados.
-- **Organização ruim**: lógica de negócio embutida nos handlers; ausência de classes/serviços reutilizáveis.
-- **Status codes inconsistentes**: respostas de erro retornam `200 OK`.
-- **Logs precários**: apenas `console.log`, sem middleware ou correlação.
+## 📂 Estrutura de Pastas
 
-## 🚨 Impactos Práticos
+```
+model/
+	HepatitisCdata.csv      # Dataset
+	model_api.py            # Flask app (endpoints)
+	prediction_service.py   # Classes de predição e repositório
+src/
+	services/
+		PredictionClient.js   # Cliente HTTP para o Flask
+	repositories/
+		DiagnosisRepository.js# Persistência local
+index.js                  # Servidor Express (rotas principais)
+public/                   # Front-end estático + diagnósticos.json
+requirements.txt          # Dependências Python
+package.json              # Dependências Node
+```
 
-- **Manutenibilidade baixa**: mudanças quebram facilmente o pipeline.
-- **Riscos de segurança e privacidade**: exposição de diagnósticos publicamente.
-- **Baixo desempenho sob carga**: I/O síncrono no Node e recarregamento do modelo em cada request no Flask.
-- **Confiabilidade fraca**: falta de validações, erros genéricos, ausência de testes.
-- **Comprometimento científico**: métricas inválidas devido a data leakage e definição incorreta de “accuracy”.
+## 🔧 Requisitos
+
+Python 3.11+ (ideal) / 3.13 testado
+Node.js 18+
+
+## 📦 Instalação
+
+### Backend Python (Flask)
+
+```powershell
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### Backend Node.js (Express)
+
+```powershell
+npm install
+```
+
+## ▶️ Execução
+
+Em dois terminais separados:
+
+```powershell
+# Terminal 1 - Flask
+$env:DEBUG="1"; python model\model_api.py
+
+# Terminal 2 - Node
+npm start
+```
+
+Aplicação web: http://localhost:3000  
+Serviço de predição: http://localhost:5000
+
+## 🔄 Endpoints Principais
+
+### Flask
+| Método | Rota | Descrição |
+|--------|------|-----------|
+| POST | /train | Re-treina modelo e retorna acurácia de validação |
+| POST | /predict | Prediz categoria hepática para um registro |
+
+Exemplo de payload:
+```json
+{
+	"Age": 45,
+	"Sex": "m",
+	"ALB": 40.2,
+	"ALP": 60.1,
+	"ALT": 15.7,
+	"AST": 22.3,
+	"BIL": 5.1,
+	"CHE": 7.2,
+	"CHOL": 3.9,
+	"CREA": 90,
+	"GGT": 25.4,
+	"PROT": 70
+}
+```
+
+Resposta:
+```json
+{
+	"prediction": 0,
+	"label": "0=Blood Donor",
+	"accuracy": 0.9876
+}
+```
+
+### Node.js
+| Método | Rota | Descrição |
+|--------|------|-----------|
+| POST | /diagnose | Chama Flask e retorna predição |
+| POST | /retrain | Proxy para /train do Flask |
+| GET | /diagnosticos | Lista diagnósticos salvos |
+| POST | /diagnosticos | Cria registro (usuário + resultado) |
+| PUT | /diagnosticos/:id | Atualiza registro |
+| DELETE | /diagnosticos/:id | Remove registro |
+
+## 🗄️ Persistência Opcional (MySQL)
+
+Defina a variável de ambiente:
+```
+DB_URL=mysql+pymysql://usuario:senha@host:3306/banco
+```
+Predições serão logadas na tabela `predictions` (criada automaticamente).
+
+## 🧪 Teste Rápido via Python
+
+```python
+from prediction_service import HepatitisPredictor, make_default_paths
+p = HepatitisPredictor(make_default_paths())
+p.train()
+print(p.predict({"Age":32,"Sex":"m","ALB":38.5,"ALP":52.5,"ALT":7.7,"AST":22.1,"BIL":7.5,"CHE":6.93,"CHOL":3.23,"CREA":106,"GGT":12.1,"PROT":69}))
+```
+
+## 🔍 Debug
+
+Exportar `DEBUG=1` habilita logs adicionais e traceback nos erros.
+
+## ✅ Próximos Passos (Sugestões)
+
+- Implementar testes automatizados (Pytest / Jest)
+- Adicionar validação formal (Pydantic / Zod)
+- Containerização (Dockerfile + docker-compose)
+- Autenticação/JWT para rotas de diagnóstico
+- Versionar modelos e métricas de treino
+- Substituir JSON plano por SQLite/MySQL para registros de diagnósticos
+
+## 📄 Licença
+
+Uso acadêmico / estudo. Adaptar conforme necessidade institucional.
+
+---
+Refatoração concluída: arquitetura modular, comentários claros e expansão facilitada. 
+Se precisar de testes ou Docker, abra uma issue ou solicite diretamente.
